@@ -5,11 +5,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Time;
+import java.sql.Timestamp;
 import java.util.Date;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import lsi.ubu.excepciones.CompraBilleteTrenException;
 import lsi.ubu.util.PoolDeConexiones;
 
 public class ServicioImpl implements Servicio {
@@ -24,11 +26,30 @@ public class ServicioImpl implements Servicio {
 		java.sql.Date fechaSqlDate = new java.sql.Date(fecha.getTime());
 		java.sql.Timestamp horaTimestamp = new java.sql.Timestamp(hora.getTime());
 
-		Connection con = null;
-		PreparedStatement st = null;
-		ResultSet rs = null;
-
-		// A completar por el alumno
+		/*
+		 * try { Connection con = pool.getConnection(); PreparedStatement
+		 * stBilletesLibres = con.prepareStatement(
+		 * "SELECT viajes.idViaje FROM viajes INNER JOIN recorridos on viajes.idRecorrido = recorridos.idRecorrido WHERE viajes.fecha = ? and estacionOrigen = ? and estacionDestino = ?"
+		 * );
+		 * 
+		 * stBilletesLibres.setDate(1, fechaSqlDate); stBilletesLibres.setString(2,
+		 * origen); stBilletesLibres.setString(3, destino);
+		 * 
+		 * ResultSet existeRecorrido = stBilletesLibres.executeQuery();
+		 * 
+		 * if (!existeRecorrido.next()) { throw new
+		 * CompraBilleteTrenException(CompraBilleteTrenException.NO_EXISTE_VIAJE); }
+		 * String conExisteTicket = "SELECT cantidad FROM tickets WHERE idTicket = ?";
+		 * PreparedStatement stExisteTicket = con.prepareStatement(conExisteTicket);
+		 * 
+		 * stExisteTicket.setInt(1, ticket);
+		 * 
+		 * ResultSet existeTicket = stExisteTicket.executeQuery(); if
+		 * (!existeTicket.next()) { throw new SQLException(); } } catch
+		 * (CompraBilleteTrenException e) {
+		 * 
+		 * }
+		 */
 	}
 
 	@Override
@@ -40,11 +61,86 @@ public class ServicioImpl implements Servicio {
 		java.sql.Date fechaSqlDate = new java.sql.Date(fecha.getTime());
 		java.sql.Timestamp horaTimestamp = new java.sql.Timestamp(hora.getTime());
 
-		Connection con = null;
-		PreparedStatement st = null;
-		ResultSet rs = null;
+		Connection con = pool.getConnection();
 
-		// A completar por el alumno
+		ResultSet existeRecorrido = null;
+		ResultSet ticketsLibres = null;
+
+		int ticketsDispo = 0;
+
+		try {
+
+			PreparedStatement stBilletesLibres = con.prepareStatement(
+					"SELECT viajes.idViaje FROM viajes INNER JOIN recorridos on viajes.idRecorrido = recorridos.idRecorrido WHERE viajes.fecha = ? and estacionOrigen = ? and estacionDestino = ?");
+
+			stBilletesLibres.setDate(1, fechaSqlDate);
+			stBilletesLibres.setString(2, origen);
+			stBilletesLibres.setString(3, destino);
+
+			existeRecorrido = stBilletesLibres.executeQuery();
+			if (!existeRecorrido.next()) {
+				throw new CompraBilleteTrenException(CompraBilleteTrenException.NO_EXISTE_VIAJE);
+			}
+			int idViaje = existeRecorrido.getInt(1);
+
+			
+			String conPlazasLibres = "SELECT nPlazasLibres FROM viajes where idViaje = ?";
+			PreparedStatement stTicketsLibres = con.prepareStatement(conPlazasLibres);
+
+			stTicketsLibres.setInt(1, idViaje);
+
+			ticketsLibres = stTicketsLibres.executeQuery();
+			if (ticketsLibres.next()) {
+				ticketsDispo = ticketsLibres.getInt(1);
+			}
+
+			if (ticketsDispo < nroPlazas) {
+				throw new CompraBilleteTrenException(CompraBilleteTrenException.NO_PLAZAS);
+			}
+
+			PreparedStatement stBilletes = con.prepareStatement(
+					"INSERT INTO tickets (idTicket, idViaje, fechaCompra, cantidad, precio) VALUES (seq_tickets.nextval, ?, ?, ?, 50)");
+
+			Date fechaActual = new Date();
+			Timestamp actualDia = new Timestamp(fechaActual.getTime());
+			stBilletes.setInt(1, idViaje);
+			stBilletes.setTimestamp(2, actualDia);
+			stBilletes.setInt(3, nroPlazas);
+
+			stBilletes.executeUpdate();
+
+			int libresFinal = ticketsDispo - nroPlazas;
+
+			String updCantidad = "UPDATE viajes SET nPlazasLibres = ? WHERE idViaje = ?";
+			PreparedStatement stCantidad = con.prepareStatement(updCantidad);
+
+			stCantidad.setInt(1, libresFinal);
+			stCantidad.setInt(2, idViaje);
+
+			stCantidad.executeUpdate();
+
+			con.commit();
+		} catch (SQLException e) {
+			con.rollback();
+			
+			if (e instanceof CompraBilleteTrenException) {
+				throw new CompraBilleteTrenException(e.getErrorCode());
+			}
+
+			LOGGER.info(e.getErrorCode() + ": " + e.getMessage());
+		} finally {
+			if (existeRecorrido != null)
+				existeRecorrido.close();
+			if (ticketsLibres != null)
+				ticketsLibres.close();
+			con.close();
+		}
+	}
+
+	@Override
+	public void modificarBillete(int billeteId, int nuevoNroPlazas) throws SQLException {
+		// TODO Auto-generated method stub
+
 	}
 
 }
