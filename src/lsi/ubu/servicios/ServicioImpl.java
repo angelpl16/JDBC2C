@@ -11,6 +11,7 @@ import java.util.Date;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import lsi.ubu.excepciones.AnulaBilleteTrenException;
 import lsi.ubu.excepciones.CompraBilleteTrenException;
 import lsi.ubu.util.PoolDeConexiones;
 
@@ -21,35 +22,83 @@ public class ServicioImpl implements Servicio {
 	public void anularBillete(Time hora, java.util.Date fecha, String origen, String destino, int nroPlazas, int ticket)
 			throws SQLException {
 		PoolDeConexiones pool = PoolDeConexiones.getInstance();
+		
+		Connection con = pool.getConnection();
 
 		/* Conversiones de fechas y horas */
 		java.sql.Date fechaSqlDate = new java.sql.Date(fecha.getTime());
 		java.sql.Timestamp horaTimestamp = new java.sql.Timestamp(hora.getTime());
+		
+		ResultSet existeRecorrido = null;
+		ResultSet cantidadTickets = null;
 
-		/*
-		 * try { Connection con = pool.getConnection(); PreparedStatement
-		 * stBilletesLibres = con.prepareStatement(
-		 * "SELECT viajes.idViaje FROM viajes INNER JOIN recorridos on viajes.idRecorrido = recorridos.idRecorrido WHERE viajes.fecha = ? and estacionOrigen = ? and estacionDestino = ?"
-		 * );
-		 * 
-		 * stBilletesLibres.setDate(1, fechaSqlDate); stBilletesLibres.setString(2,
-		 * origen); stBilletesLibres.setString(3, destino);
-		 * 
-		 * ResultSet existeRecorrido = stBilletesLibres.executeQuery();
-		 * 
-		 * if (!existeRecorrido.next()) { throw new
-		 * CompraBilleteTrenException(CompraBilleteTrenException.NO_EXISTE_VIAJE); }
-		 * String conExisteTicket = "SELECT cantidad FROM tickets WHERE idTicket = ?";
-		 * PreparedStatement stExisteTicket = con.prepareStatement(conExisteTicket);
-		 * 
-		 * stExisteTicket.setInt(1, ticket);
-		 * 
-		 * ResultSet existeTicket = stExisteTicket.executeQuery(); if
-		 * (!existeTicket.next()) { throw new SQLException(); } } catch
-		 * (CompraBilleteTrenException e) {
-		 * 
-		 * }
-		 */
+		try {
+			
+			PreparedStatement stBilletesLibres = con.prepareStatement(
+					"SELECT viajes.idViaje FROM viajes INNER JOIN recorridos on viajes.idRecorrido = recorridos.idRecorrido WHERE viajes.fecha = ? and estacionOrigen = ? and estacionDestino = ?");
+
+			stBilletesLibres.setDate(1, fechaSqlDate);
+			stBilletesLibres.setString(2, origen);
+			stBilletesLibres.setString(3, destino);
+
+			existeRecorrido = stBilletesLibres.executeQuery();
+
+			if (!existeRecorrido.next()) {
+				throw new CompraBilleteTrenException(CompraBilleteTrenException.NO_EXISTE_VIAJE);
+			}
+			
+			if (existeRecorrido.getInt(1) != ticket) {
+				throw new AnulaBilleteTrenException(AnulaBilleteTrenException.NO_BILLETE);
+			}
+			
+			PreparedStatement stExisteTicket = con.prepareStatement("SELECT cantidad FROM tickets WHERE idTicket = ?");
+
+			stExisteTicket.setInt(1, ticket);
+
+			cantidadTickets = stExisteTicket.executeQuery();
+			
+			cantidadTickets.next();
+			
+			int plazas_eliminar = cantidadTickets.getInt(1);
+			if (plazas_eliminar != nroPlazas) {
+				throw new AnulaBilleteTrenException(AnulaBilleteTrenException.PLAZAS_ERRONEAS);
+			}
+			
+			String updPlazas = "UPDATE viajes v set v.nPlazasLibres = v.nPlazasLibres + ? WHERE v.fecha = ? AND v.idRecorrido IN (SELECT r.idRecorrido FROM recorridos r WHERE r.estacionOrigen = ? AND r.estacionDestino = ?)";
+			PreparedStatement stUpdPlazas = con.prepareStatement(updPlazas);
+			
+			stUpdPlazas.setInt(1, nroPlazas);
+			stUpdPlazas.setDate(2, fechaSqlDate);
+			stUpdPlazas.setString(3, origen);
+			stUpdPlazas.setString(4, destino);
+			
+			stUpdPlazas.executeUpdate();
+			
+			con.commit();
+
+		} catch (SQLException e) {
+			
+			con.rollback();
+			
+			if (e instanceof CompraBilleteTrenException) {
+				throw new CompraBilleteTrenException(e.getErrorCode());
+			} else if (e instanceof AnulaBilleteTrenException) {
+				throw new AnulaBilleteTrenException(e.getErrorCode());
+			} else {
+				LOGGER.info(e.getErrorCode() + ": " + e.getMessage());
+			}
+
+		} finally {
+			if (existeRecorrido != null) {
+				existeRecorrido.close();
+			}
+			if (cantidadTickets != null) {
+				cantidadTickets.close();
+			}
+			
+			con.close();
+		}
+
 	}
 
 	@Override
@@ -83,7 +132,6 @@ public class ServicioImpl implements Servicio {
 			}
 			int idViaje = existeRecorrido.getInt(1);
 
-			
 			String conPlazasLibres = "SELECT nPlazasLibres FROM viajes where idViaje = ?";
 			PreparedStatement stTicketsLibres = con.prepareStatement(conPlazasLibres);
 
@@ -122,12 +170,12 @@ public class ServicioImpl implements Servicio {
 			con.commit();
 		} catch (SQLException e) {
 			con.rollback();
-			
+
 			if (e instanceof CompraBilleteTrenException) {
 				throw new CompraBilleteTrenException(e.getErrorCode());
+			} else {
+				LOGGER.info(e.getErrorCode() + ": " + e.getMessage());
 			}
-
-			LOGGER.info(e.getErrorCode() + ": " + e.getMessage());
 		} finally {
 			if (existeRecorrido != null)
 				existeRecorrido.close();
